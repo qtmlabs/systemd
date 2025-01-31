@@ -50,6 +50,7 @@
 #include "time-util.h"
 
 #define DEFAULT_HIBERNATE_DELAY_USEC_NO_BATTERY (2 * USEC_PER_HOUR)
+#define ALARM_ACCURACY_USEC (2 * USEC_PER_SEC)
 
 static SleepOperation arg_operation = _SLEEP_OPERATION_INVALID;
 
@@ -401,25 +402,24 @@ static int custom_timer_suspend(const SleepConfig *sleep_config) {
 
                 usec_t before_timestamp = now(CLOCK_BOOTTIME);
                 suspend_interval = MIN(suspend_interval, usec_sub_unsigned(hibernate_timestamp, before_timestamp));
-                if (suspend_interval <= 0)
+                if (suspend_interval <= ALARM_ACCURACY_USEC)
                         break; /* system should hibernate */
+
+                usec_t suspend_timestamp = usec_add(before_timestamp, suspend_interval);
 
                 log_debug("Set timerfd wake alarm for %s", FORMAT_TIMESPAN(suspend_interval, USEC_PER_SEC));
                 /* Wake alarm for system with or without battery to hibernate or estimate discharge rate whichever is applicable */
-                timespec_store(&ts.it_value, suspend_interval);
+                timespec_store(&ts.it_value, suspend_timestamp);
 
-                if (timerfd_settime(tfd, 0, &ts, NULL) < 0)
+                if (timerfd_settime(tfd, TIMER_ABSTIME, &ts, NULL) < 0)
                         return log_error_errno(errno, "Error setting battery estimate timer: %m");
 
                 r = execute(sleep_config, SLEEP_SUSPEND, NULL);
                 if (r < 0)
                         return r;
 
-                r = fd_wait_for_event(tfd, POLLIN, 0);
-                if (r < 0)
-                        return log_error_errno(r, "Error polling timerfd: %m");
-                /* Store fd_wait status */
-                woken_by_timer = FLAGS_SET(r, POLLIN);
+                usec_t after_timestamp = now(CLOCK_BOOTTIME);
+                woken_by_timer = usec_sub_unsigned(suspend_timestamp, after_timestamp) <= ALARM_ACCURACY_USEC;
 
                 r = fetch_batteries_capacity_by_name(&current_capacity);
                 if (r < 0 || hashmap_isempty(current_capacity)) {
@@ -435,7 +435,6 @@ static int custom_timer_suspend(const SleepConfig *sleep_config) {
                         break;
                 }
 
-                usec_t after_timestamp = now(CLOCK_BOOTTIME);
                 log_debug("Attempting to estimate battery discharge rate after wakeup from %s sleep",
                           FORMAT_TIMESPAN(after_timestamp - before_timestamp, USEC_PER_HOUR));
 
