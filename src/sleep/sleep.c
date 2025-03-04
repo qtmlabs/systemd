@@ -315,43 +315,6 @@ fail:
         return r;
 }
 
-/* Return true if wakeup type is APM timer */
-static int check_wakeup_type(void) {
-        static const char dmi_object_path[] = "/sys/firmware/dmi/entries/1-0/raw";
-        uint8_t wakeup_type_byte, tablesize;
-        _cleanup_free_ char *buf = NULL;
-        size_t bufsize;
-        int r;
-
-        /* implementation via dmi/entries */
-        r = read_full_virtual_file(dmi_object_path, &buf, &bufsize);
-        if (r < 0)
-                return log_debug_errno(r, "Unable to read %s: %m", dmi_object_path);
-        if (bufsize < 25)
-                return log_debug_errno(SYNTHETIC_ERRNO(EINVAL),
-                                       "Only read %zu bytes from %s (expected 25)",
-                                       bufsize, dmi_object_path);
-
-        /* index 1 stores the size of table */
-        tablesize = (uint8_t) buf[1];
-        if (tablesize < 25)
-                return log_debug_errno(SYNTHETIC_ERRNO(EINVAL),
-                                       "Table size less than the index[0x18] where waketype byte is available.");
-
-        wakeup_type_byte = (uint8_t) buf[24];
-        /* 0 is Reserved and 8 is AC Power Restored. As per table 12 in
-         * https://www.dmtf.org/sites/default/files/standards/documents/DSP0134_3.4.0.pdf */
-        if (wakeup_type_byte >= 128)
-                return log_debug_errno(SYNTHETIC_ERRNO(EINVAL), "Expected value in range 0-127");
-
-        if (wakeup_type_byte == 3) {
-                log_debug("DMI BIOS System Information indicates wakeup type is APM Timer");
-                return true;
-        }
-
-        return false;
-}
-
 static int custom_timer_suspend(const SleepConfig *sleep_config) {
         usec_t hibernate_timestamp;
         int r;
@@ -448,13 +411,6 @@ static int custom_timer_suspend(const SleepConfig *sleep_config) {
                 if (!woken_by_timer)
                         /* Return as manual wakeup done. This also will return in case battery was charged during suspension */
                         return 0;
-
-                r = check_wakeup_type();
-                if (r > 0) {
-                        log_debug("wakeup type is APM timer");
-                        /* system should hibernate */
-                        break;
-                }
         }
 
         return 1;
@@ -465,41 +421,12 @@ static int execute_s2h(const SleepConfig *sleep_config) {
 
         assert(sleep_config);
 
-        /* Only check if we have automated battery alarms if HibernateDelaySec= is not set, as in that case
-         * we'll busy poll for the configured interval instead */
-        if (!timestamp_is_set(sleep_config->hibernate_delay_usec)) {
-                r = check_wakeup_type();
-                if (r < 0)
-                        log_warning_errno(r, "Failed to check hardware wakeup type, ignoring: %m");
-                else {
-                        r = battery_trip_point_alarm_exists();
-                        if (r < 0)
-                                log_warning_errno(r, "Failed to check whether acpi_btp support is enabled or not, ignoring: %m");
-                }
-        } else
-                r = 0;  /* Force fallback path */
-
-        if (r > 0) { /* If we have both wakeup alarms and battery trip point support, use them */
-                log_debug("Attempting to suspend...");
-                r = execute(sleep_config, SLEEP_SUSPEND, NULL);
-                if (r < 0)
-                        return r;
-
-                r = check_wakeup_type();
-                if (r < 0)
-                        return log_error_errno(r, "Failed to check hardware wakeup type: %m");
-
-                if (r == 0)
-                        /* For APM Timer wakeup, system should hibernate else wakeup */
-                        return 0;
-        } else {
-                r = custom_timer_suspend(sleep_config);
-                if (r < 0)
-                        return log_debug_errno(r, "Suspend cycle with manual battery discharge rate estimation failed: %m");
-                if (r == 0)
-                        /* manual wakeup */
-                        return 0;
-        }
+        r = custom_timer_suspend(sleep_config);
+        if (r < 0)
+                return log_debug_errno(r, "Suspend cycle with manual battery discharge rate estimation failed: %m");
+        if (r == 0)
+                /* manual wakeup */
+                return 0;
         /* For above custom timer, if 1 is returned, system will directly hibernate */
 
         log_debug("Attempting to hibernate");
