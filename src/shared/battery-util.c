@@ -281,3 +281,17 @@ int battery_is_discharging_and_low(void) {
         /* If found neither charged nor low batteries, assume that we aren't in low battery state */
         return found_low;
 }
+
+int battery_is_present(void) {
+        _cleanup_(sd_device_enumerator_unrefp) sd_device_enumerator *e = NULL;
+        int r;
+
+        r = battery_enumerator_new(&e);
+        if (r < 0)
+                return log_error_errno(r, "Failed to initialize battery enumerator: %m");
+
+        if (sd_device_enumerator_get_device_first(e))
+                return true;
+
+        return false;
+}

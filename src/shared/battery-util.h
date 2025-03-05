@@ -6,6 +6,7 @@
 int on_ac_power(void);
 
 int battery_is_discharging_and_low(void);
+int battery_is_present(void);
 
 int battery_enumerator_new(sd_device_enumerator **ret);
 int battery_read_capacity_percentage(sd_device *dev);
