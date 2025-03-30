@@ -322,7 +322,7 @@ static int custom_timer_suspend(const SleepConfig *sleep_config) {
 
         hibernate_timestamp = usec_add(now(CLOCK_BOOTTIME), sleep_config->hibernate_delay_usec);
 
-        while (battery_is_discharging_and_low() == 0) {
+        while (battery_is_discharging_and_low() <= 0) {
                 _cleanup_close_ int tfd = -EBADF;
                 struct itimerspec ts = {};
                 usec_t suspend_interval;
